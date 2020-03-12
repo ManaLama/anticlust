@@ -87,7 +87,7 @@ fast_anticlustering <- function(x, K, k_neighbours = Inf, categories = NULL) {
   x <- as.matrix(x)
   exchange_partners <- all_exchange_partners(x, k_neighbours, categories)
   init <- initialize_clusters(nrow(x), K, categories)
-  fast_exchange_(x, init, exchange_partners)
+  fast_exchange_(x, init, exchange_partners, "variance")
 }
 
 #' Solve anticlustering using the fast exchange method
@@ -95,20 +95,22 @@ fast_anticlustering <- function(x, K, k_neighbours = Inf, categories = NULL) {
 #' @param data the data -- an N x M table of item features
 #' @param clusters An initial cluster assignment
 #' @param all_exchange_partners A list of exchange partners
+#' @param objective The objective to be optimized; either "variance"
+#'   or "distance", or a custom objective function
 #'
 #' @return The anticluster assignment
 #'
 #' @noRd
 #'
 
-fast_exchange_ <- function(data, clusters, all_exchange_partners) {
+fast_exchange_ <- function(data, clusters, all_exchange_partners, objective) {
   N <- nrow(data)
-  best_total <- variance_objective_(clusters, data)
-  centers <- cluster_centers(data, clusters)
-  distances <- dist_from_centers(data, centers, squared = TRUE)
   
-  ## frequencies of each cluster are required for updating cluster centers:
-  tab <- c(table(clusters))
+  # `ds` contains the data structures needed to update the objectives after
+  # each exchange. What data is inside `ds` differs between the different
+  # objectives that can be optimized using the exchange method.
+  ds <- data_setup(clusters, data, objective)
+  
   for (i in 1:N) {
     # cluster of current item
     cluster_i <- clusters[i]
@@ -123,39 +125,59 @@ fast_exchange_ <- function(data, clusters, all_exchange_partners) {
     # container to store objectives associated with each exchange of item i:
     comparison_objectives <- rep(NA, length(exchange_partners))
     for (j in seq_along(exchange_partners)) {
-      ## Swap item i with all legal exchange partners and check out objective
-      # (a) Determine clusters of to-be-swapped elements
-      tmp_clusters <- clusters
-      tmp_swap <- exchange_partners[j]
-      cluster_j <- tmp_clusters[tmp_swap]
-      # (b) Swap the elements
-      tmp_clusters[i] <- cluster_j
-      tmp_clusters[tmp_swap] <- cluster_i
-      # (c) Update cluster centers after swap
-      tmp_centers <- update_centers(centers, data, i, tmp_swap, cluster_i, cluster_j, tab)
-      # (d) Update distances from centers after swap
-      tmp_distances <- update_distances(data, tmp_centers, distances, cluster_i, cluster_j)
-      # (e) Compute objective after swap
-      comparison_objectives[j] <- sum(tmp_distances[cbind(1:nrow(tmp_distances), tmp_clusters)])
+      tmp_ds <- update_data(ds, i, exchange_partners[j])
+      comparison_objectives[j] <- tmp_ds$objective
     }
     ## If an improvement of the objective occured, do the swap
     best_this_round <- max(comparison_objectives)
-    if (best_this_round > best_total) {
+    if (best_this_round > ds$objective) {
       # which element has to be swapped
       swap <- exchange_partners[comparison_objectives == best_this_round][1]
-      # Update cluster centers
-      centers <- update_centers(centers, data, i, swap, clusters[i], clusters[swap], tab)
-      # Update distances
-      distances <- update_distances(data, centers, distances, cluster_i, clusters[swap])
-      # Actually swap the elements - i.e., update clusters
-      clusters[i] <- clusters[swap]
-      clusters[swap] <- cluster_i
-      # Update best solution
-      best_total <- best_this_round
+      # Update data structure
+      ds <- update_data(ds, i, swap)
     }
   }
-  clusters
+  ds$clusters
 }
+
+
+# Set up data structure for optimizing variance objective
+data_setup <- function(clusters, data, objective) {
+  ds <- list()
+  ds$clusters <- clusters
+  ds$data <- data
+  
+  if (inherits(objective, "function")) {
+    NULL
+  } else if (objective == "variance") {
+    ds$objective <- variance_objective_(clusters, data)
+    ds$centers <- cluster_centers(data, clusters)
+    ds$distances <- dist_from_centers(data, ds$centers, squared = TRUE)
+    ds$tab <- c(table(clusters))
+    class(ds) <- c("str_var", "list")
+  } else if (objective == "distance") {
+    NULL
+  }
+  ds
+}
+
+# Update data structure for variance objective after a swap
+update_data <- function(ds, i, j) {
+  # (a) Determine clusters of to-be-swapped elements
+  cluster_j <- ds$clusters[j]
+  cluster_i <- ds$clusters[i]
+  # (b) Swap the elements
+  ds$clusters[i] <- cluster_j
+  ds$clusters[j] <- cluster_i
+  # (c) Update cluster centers after swap
+  ds$centers <- update_centers(ds$centers, ds$data, i, j, cluster_i, cluster_j, ds$tab)
+  # (d) Update distances from centers after swap
+  ds$distances <- update_distances(ds$data, ds$centers, ds$distances, cluster_i, cluster_j)
+  # (e) Compute objective after swap
+  ds$objective <- sum(ds$distances[cbind(1:nrow(ds$distances), ds$clusters)])
+  ds
+}
+
 
 #' Recompute distances from cluster centers after swapping two elements
 #' @param distances distances from cluster centers per element (old)
