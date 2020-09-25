@@ -1,4 +1,4 @@
-#anticlust 
+# anticlust # 
 
 This repository is a fork from the anticlust R package (https://github.com/m-Py/anticlust) that was used to implement an anticlustering algorithm proposed by Brusco et al (in press) as part of a Bachelor thesis at the Computer Science Department at Heinrich Heine University Düsseldorf. The code has been integrated into the main repository at https://github.com/m-Py/anticlust and this fork is no longer maintained.
 
